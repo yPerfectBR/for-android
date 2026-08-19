@@ -70,6 +70,7 @@ import chat.stoat.R
 import chat.stoat.api.StoatAPI
 import chat.stoat.composables.chat.displayNameInChannel
 import chat.stoat.core.model.util.UserVoiceState
+import chat.stoat.voice.ScreenShareQuality
 import chat.stoat.voice.VoiceCallManager
 import com.twilio.audioswitch.AudioDevice
 import com.twilio.audioswitch.AudioDeviceChangeListener
@@ -81,7 +82,6 @@ import io.livekit.android.compose.ui.VideoTrackView
 import io.livekit.android.room.Room
 import io.livekit.android.room.track.LocalVideoTrack
 import io.livekit.android.room.track.Track
-import io.livekit.android.room.track.screencapture.ScreenCaptureParams
 import io.livekit.android.util.flow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -109,6 +109,7 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
         val participants by rememberParticipants(room)
         val trackRefs by rememberTracks(passedRoom = room)
         val isDeafened = VoiceCallManager.isDeafened
+        val screenShareQuality = VoiceCallManager.screenShareQuality
 
         val audioHandler = room.audioSwitchHandler
         var audioDevices by remember {
@@ -330,10 +331,7 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                 if (result.resultCode == Activity.RESULT_OK && data != null) {
                     scope.launch {
                         try {
-                            val published = room.localParticipant.setScreenShareEnabled(
-                                true,
-                                ScreenCaptureParams(data)
-                            )
+                            val published = VoiceCallManager.startScreenShare(data)
                             logcat { "Screen share enable result: $published" }
                         } catch (e: Exception) {
                             logcat(LogPriority.ERROR) {
@@ -351,6 +349,7 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
 
             var toolbarExpanded by remember { mutableStateOf(false) }
             var outputMenuOpen by remember { mutableStateOf(false) }
+            var screenQualityMenuOpen by remember { mutableStateOf(false) }
             val chevronRotation by animateFloatAsState(
                 targetValue = if (toolbarExpanded) 90f else 270f,
                 label = "voice toolbar chevron"
@@ -433,6 +432,48 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                                 }
                         )
                     }
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        ListItem(
+                            colors = ListItemDefaults.colors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer
+                            ),
+                            headlineContent = { Text("Screen share quality") },
+                            supportingContent = { Text(screenShareQuality.label) },
+                            leadingContent = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_screen_share_24dp),
+                                    contentDescription = null
+                                )
+                            },
+                            modifier = Modifier
+                                .clip(MaterialTheme.shapes.extraSmall)
+                                .clickable {
+                                    if (!isScreenShared) screenQualityMenuOpen = true
+                                }
+                        )
+                        DropdownMenu(
+                            expanded = screenQualityMenuOpen,
+                            onDismissRequest = { screenQualityMenuOpen = false }
+                        ) {
+                            ScreenShareQuality.entries.forEach { quality ->
+                                DropdownMenuItem(
+                                    text = { Text(quality.label) },
+                                    trailingIcon = {
+                                        if (quality == screenShareQuality) {
+                                            Icon(
+                                                painter = painterResource(R.drawable.ic_check_24dp),
+                                                contentDescription = null
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        VoiceCallManager.updateScreenShareQuality(quality)
+                                        screenQualityMenuOpen = false
+                                    }
+                                )
+                            }
+                        }
+                    }
                     ListItem(
                         colors = ListItemDefaults.colors(
                             containerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -459,7 +500,7 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                             .clickable {
                                 if (isScreenShared) {
                                     scope.launch {
-                                        room.localParticipant.setScreenShareEnabled(false)
+                                        VoiceCallManager.stopScreenShare()
                                     }
                                 } else {
                                     context.getSystemService(MediaProjectionManager::class.java)

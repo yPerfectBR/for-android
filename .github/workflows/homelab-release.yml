@@ -66,6 +66,14 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Set release version
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "RVX_RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RVX_RELEASE_VERSION_CODE=$((2000000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+
       - name: Build debug APK
         run: ./gradlew clean :app:assembleDebug --no-daemon
 

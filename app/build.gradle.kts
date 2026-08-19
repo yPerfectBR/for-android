@@ -63,8 +63,9 @@ android {
         applicationId = "io.github.yperfectbr.stoathomelab"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = Integer.parseInt("001_007_002".replace("_", ""), 10)
-        versionName = "1.7.2"
+        versionCode = System.getenv("RVX_RELEASE_VERSION_CODE")?.toIntOrNull()
+            ?: Integer.parseInt("001_007_002".replace("_", ""), 10)
+        versionName = System.getenv("RVX_RELEASE_VERSION") ?: "1.7.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

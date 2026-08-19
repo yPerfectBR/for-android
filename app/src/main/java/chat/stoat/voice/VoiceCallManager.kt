@@ -1,9 +1,14 @@
 package chat.stoat.voice
 
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import chat.stoat.R
 import chat.stoat.StoatApplication
 import chat.stoat.api.StoatAPI
@@ -21,13 +26,19 @@ import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.request.get
 import io.ktor.http.isSuccess
 import io.livekit.android.LiveKit
+import io.livekit.android.audio.ScreenAudioCapturer
 import io.livekit.android.RoomOptions
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.room.Room
+import io.livekit.android.room.participant.VideoTrackPublishDefaults
+import io.livekit.android.room.track.LocalAudioTrack
+import io.livekit.android.room.track.LocalVideoTrack
 import io.livekit.android.room.track.LocalVideoTrackOptions
 import io.livekit.android.room.track.RemoteAudioTrack
-import io.livekit.android.room.track.ScreenSharePresets
+import io.livekit.android.room.track.VideoCaptureParameter
+import io.livekit.android.room.track.VideoEncoding
 import io.livekit.android.room.track.Track
+import io.livekit.android.room.track.screencapture.ScreenCaptureParams
 import io.livekit.android.util.flow
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -82,6 +93,12 @@ object VoiceCallManager {
     private var hasPlayedJoinSound = false
     private var hasPlayedLeaveSound = false
 
+    var screenShareQuality: ScreenShareQuality by mutableStateOf(ScreenShareQuality.H720_30)
+        private set
+
+    private var screenAudioCapturer: ScreenAudioCapturer? = null
+    private var screenAudioTrack: LocalAudioTrack? = null
+
     init {
         scope.launch {
             OngoingCallService.hangupEvents.collect { leave() }
@@ -101,10 +118,8 @@ object VoiceCallManager {
         val newRoom = LiveKit.create(
             context.applicationContext,
             RoomOptions(
-                screenShareTrackCaptureDefaults = LocalVideoTrackOptions(
-                    isScreencast = true,
-                    captureParams = ScreenSharePresets.H720_FPS30.capture
-                )
+                screenShareTrackCaptureDefaults = screenShareCaptureOptions(screenShareQuality),
+                screenShareTrackPublishDefaults = screenSharePublishOptions(screenShareQuality)
             )
         )
         room = newRoom
@@ -144,6 +159,7 @@ object VoiceCallManager {
         micWasOnBeforeDeafen = false
 
         if (leftRoom != null) {
+            stopScreenAudioCapture()
             if (hasPlayedJoinSound && !hasPlayedLeaveSound) {
                 hasPlayedLeaveSound = true
                 soundPlayer?.play(VoiceSound.USER_LEAVE)
@@ -154,6 +170,108 @@ object VoiceCallManager {
         soundPlayer?.release()
         soundPlayer = null
         OngoingCallService.stop(context)
+    }
+
+    private fun screenShareCaptureOptions(quality: ScreenShareQuality) =
+        LocalVideoTrackOptions(
+            isScreencast = true,
+            captureParams = VideoCaptureParameter(
+                width = quality.width,
+                height = quality.height,
+                maxFps = quality.fps
+            )
+        )
+
+    private fun screenSharePublishOptions(quality: ScreenShareQuality) =
+        VideoTrackPublishDefaults(
+            videoEncoding = VideoEncoding(
+                maxBitrate = quality.maxBitrate,
+                maxFps = quality.fps
+            ),
+            simulcast = true
+        )
+
+    fun updateScreenShareQuality(quality: ScreenShareQuality) {
+        val currentRoom = room
+        if (currentRoom?.localParticipant?.isScreenShareEnabled == true) return
+
+        screenShareQuality = quality
+        currentRoom?.localParticipant?.apply {
+            screenShareTrackCaptureDefaults = screenShareCaptureOptions(quality)
+            screenShareTrackPublishDefaults = screenSharePublishOptions(quality)
+        }
+    }
+
+    suspend fun startScreenShare(data: Intent): Boolean {
+        val currentRoom = room ?: return false
+        currentRoom.localParticipant.apply {
+            screenShareTrackCaptureDefaults = screenShareCaptureOptions(screenShareQuality)
+            screenShareTrackPublishDefaults = screenSharePublishOptions(screenShareQuality)
+        }
+
+        val published = currentRoom.localParticipant.setScreenShareEnabled(
+            true,
+            ScreenCaptureParams(data)
+        )
+        if (published) startScreenAudioCapture(currentRoom)
+        return published
+    }
+
+    suspend fun stopScreenShare(): Boolean {
+        val currentRoom = room ?: return false
+        stopScreenAudioCapture()
+        return currentRoom.localParticipant.setScreenShareEnabled(false)
+    }
+
+    /**
+     * LiveKit Android's supported screen-audio path mixes playback capture into the
+     * existing local audio track. Android playback capture is available from API 29.
+     */
+    private fun startScreenAudioCapture(currentRoom: Room) {
+        stopScreenAudioCapture()
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            logcat(LogPriority.WARN) { "Screen-share audio requires Android 10 (API 29)+" }
+            return
+        }
+        if (
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            logcat(LogPriority.WARN) { "RECORD_AUDIO not granted; screen-share audio disabled" }
+            return
+        }
+
+        val screenTrack = currentRoom.localParticipant
+            .getTrackPublication(Track.Source.SCREEN_SHARE)
+            ?.track as? LocalVideoTrack ?: return
+        val audioTrack = currentRoom.localParticipant
+            .getTrackPublication(Track.Source.MICROPHONE)
+            ?.track as? LocalAudioTrack ?: run {
+                logcat(LogPriority.WARN) {
+                    "No local microphone publication exists; cannot attach ScreenAudioCapturer"
+                }
+                return
+            }
+
+        val capturer = ScreenAudioCapturer.createFromScreenShareTrack(screenTrack) ?: run {
+            logcat(LogPriority.WARN) { "Could not create ScreenAudioCapturer" }
+            return
+        }
+        capturer.gain = 0.35f
+        audioTrack.setAudioBufferCallback(capturer)
+        screenAudioTrack = audioTrack
+        screenAudioCapturer = capturer
+        logcat {
+            "Screen-share audio enabled; quality=${screenShareQuality.label}, gain=${capturer.gain}"
+        }
+    }
+
+    private fun stopScreenAudioCapture() {
+        screenAudioTrack?.setAudioBufferCallback(null)
+        screenAudioTrack = null
+        screenAudioCapturer?.releaseAudioResources()
+        screenAudioCapturer = null
     }
 
     fun toggleMicrophone() {
@@ -259,7 +377,10 @@ object VoiceCallManager {
         room.localParticipant::isScreenShareEnabled.flow.collect { isSharing ->
             wasSharing?.let { previous ->
                 if (isSharing && !previous) soundPlayer?.play(VoiceSound.STREAM_START)
-                if (!isSharing && previous) soundPlayer?.play(VoiceSound.STREAM_END)
+                if (!isSharing && previous) {
+                    stopScreenAudioCapture()
+                    soundPlayer?.play(VoiceSound.STREAM_END)
+                }
             }
             wasSharing = isSharing
         }
