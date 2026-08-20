@@ -19,16 +19,16 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import chat.stoat.R
-import chat.stoat.api.StoatHttp
 import chat.stoat.core.model.data.STOAT_FILES
 import chat.stoat.core.model.schemas.AutumnResource
 import chat.stoat.databinding.ActivityVideoplayerBinding
 import chat.stoat.providers.getAttachmentContentUri
+import chat.stoat.providers.streamAttachmentTo
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.snackbar.Snackbar
-import io.ktor.client.request.get
-import io.ktor.client.statement.readBytes
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class VideoViewActivity : FragmentActivity() {
     private lateinit var binding: ActivityVideoplayerBinding
@@ -195,8 +195,14 @@ class VideoViewActivity : FragmentActivity() {
                 )
             }?.let { uri ->
                 this@VideoViewActivity.contentResolver.openOutputStream(uri).use { stream ->
-                    val video = StoatHttp.get(resourceUrl).readBytes()
-                    stream?.write(video)
+                    if (stream != null) {
+                        withContext(Dispatchers.IO) {
+                            streamAttachmentTo(
+                                resourceUrl,
+                                stream
+                            )
+                        }
+                    }
 
                     this@VideoViewActivity.applicationContext.let {
                         it.contentResolver.update(
