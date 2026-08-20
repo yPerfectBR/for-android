@@ -276,6 +276,7 @@ dependencies {
     androidTestImplementation(libs.android.test.rules)
     androidTestImplementation(libs.android.test.espresso.core)
     androidTestImplementation(libs.compose.ui.test.junit4)
+    androidTestImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.junit4)
 }
 

@@ -8,6 +8,7 @@ import chat.stoat.R
 import chat.stoat.api.StoatHttp
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsChannel
+import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -21,15 +22,14 @@ class AttachmentProvider : FileProvider(R.xml.file_paths)
  * Stream a remote attachment into an OutputStream without ever
  * materialising the complete file in memory.
  */
-suspend fun streamAttachmentTo(
-    resourceUrl: String,
-    outputStream: OutputStream
+internal suspend fun copyAttachmentChannel(
+    channel: ByteReadChannel,
+    outputStream: OutputStream,
+    bufferSize: Int = 64 * 1024
 ) {
-    val response = StoatHttp.get(resourceUrl)
-    val channel = response.bodyAsChannel()
+    require(bufferSize > 0)
 
-    // Bounded memory regardless of attachment size.
-    val buffer = ByteArray(64 * 1024)
+    val buffer = ByteArray(bufferSize)
 
     while (true) {
         val read = channel.readAvailable(buffer)
@@ -50,6 +50,18 @@ suspend fun streamAttachmentTo(
     }
 
     outputStream.flush()
+}
+
+suspend fun streamAttachmentTo(
+    resourceUrl: String,
+    outputStream: OutputStream
+) {
+    val response = StoatHttp.get(resourceUrl)
+
+    copyAttachmentChannel(
+        response.bodyAsChannel(),
+        outputStream
+    )
 }
 
 suspend fun getAttachmentContentUri(
