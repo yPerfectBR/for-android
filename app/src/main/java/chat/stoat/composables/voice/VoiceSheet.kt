@@ -107,7 +107,10 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
         val isScreenShared by room.localParticipant::isScreenShareEnabled.flow.collectAsState()
         val activeSpeakers by room::activeSpeakers.flow.collectAsState()
         val participants by rememberParticipants(room)
-        val trackRefs by rememberTracks(passedRoom = room)
+        val trackRefs by rememberTracks(
+            passedRoom = room,
+            onlySubscribed = false
+        )
         val isDeafened = VoiceCallManager.isDeafened
         val screenShareQuality = VoiceCallManager.screenShareQuality
 
@@ -146,7 +149,10 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                     if (userId != null) {
                         val micEnabled by participant::isMicrophoneEnabled.flow.collectAsState()
                         val cameraEnabled by participant::isCameraEnabled.flow.collectAsState()
-                        val screenShareEnabled by participant::isScreenShareEnabled.flow.collectAsState()
+                        val trackPublications by participant::trackPublications.flow.collectAsState()
+                        val screenShareEnabled = trackPublications.values.any {
+                            it.source == Track.Source.SCREEN_SHARE && !it.muted
+                        }
                         val cachedState = voiceStates?.participants?.find { it.id == userId }
                         VoiceParticipant(
                             state = UserVoiceState(
@@ -162,63 +168,107 @@ fun VoiceSheet(onDisconnect: () -> Unit) {
                         )
                     }
                 }
-                items(trackRefs.size) { index ->
-                    val trackRef = trackRefs[index]
-                    val publication = trackRef.publication
-                    if (publication != null) {
-                        val isTrackMuted by publication::muted.flow.collectAsState()
-                        if (!isTrackMuted) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                                    .aspectRatio(16f / 9f)
-                                    .clip(MaterialTheme.shapes.large)
-                                    .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+
+items(trackRefs.size) { index ->
+    val trackRef = trackRefs[index]
+    val publication = trackRef.publication
+
+    if (publication != null) {
+        val isTrackMuted by publication::muted.flow.collectAsState()
+
+        if (!isTrackMuted) {
+            if (
+                trackRef.source == Track.Source.SCREEN_SHARE &&
+                trackRef.participant != room.localParticipant
+            ) {
+                RemoteScreenShareCard(
+                    trackReference = trackRef,
+                    room = room,
+                    channelId = channelId
+                )
+            } else if (publication.track != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            horizontal = 8.dp,
+                            vertical = 4.dp
+                        )
+                        .aspectRatio(16f / 9f)
+                        .clip(MaterialTheme.shapes.large)
+                        .background(
+                            MaterialTheme.colorScheme
+                                .surfaceContainerLowest
+                        )
+                ) {
+                    VideoTrackView(
+                        trackReference = trackRef,
+                        room = room,
+                        scaleType = ScaleType.FitInside,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    Surface(
+                        color = MaterialTheme.colorScheme
+                            .surfaceContainer
+                            .copy(alpha = 0.85f),
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment =
+                                Alignment.CenterVertically,
+                            horizontalArrangement =
+                                Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.padding(
+                                horizontal = 8.dp,
+                                vertical = 4.dp
+                            )
+                        ) {
+                            if (
+                                trackRef.source ==
+                                Track.Source.SCREEN_SHARE
                             ) {
-                                VideoTrackView(
-                                    trackReference = trackRef,
-                                    room = room,
-                                    // Letterbox vertical feeds
-                                    scaleType = ScaleType.FitInside,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surfaceContainer.copy(
-                                        alpha = 0.85f
+                                Icon(
+                                    painter = painterResource(
+                                        R.drawable
+                                            .ic_screen_share_24dp
                                     ),
-                                    shape = MaterialTheme.shapes.small,
-                                    modifier = Modifier
-                                        .align(Alignment.BottomStart)
-                                        .padding(8.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                        modifier = Modifier.padding(
-                                            horizontal = 8.dp,
-                                            vertical = 4.dp
-                                        )
-                                    ) {
-                                        if (trackRef.source == Track.Source.SCREEN_SHARE) {
-                                            Icon(
-                                                painter = painterResource(R.drawable.ic_screen_share_24dp),
-                                                contentDescription = stringResource(R.string.voice_screen_sharing),
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                        Text(
-                                            text = trackRef.participant.identity?.value
-                                                ?.let { displayNameInChannel(it, channelId) }
-                                                ?: stringResource(R.string.unknown),
-                                            style = MaterialTheme.typography.labelMedium
+                                    contentDescription =
+                                        stringResource(
+                                            R.string
+                                                .voice_screen_sharing
+                                        ),
+                                    modifier =
+                                        Modifier.size(16.dp)
+                                )
+                            }
+
+                            Text(
+                                text = trackRef.participant
+                                    .identity?.value
+                                    ?.let {
+                                        displayNameInChannel(
+                                            it,
+                                            channelId
                                         )
                                     }
-                                }
-                            }
+                                    ?: stringResource(
+                                        R.string.unknown
+                                    ),
+                                style =
+                                    MaterialTheme.typography
+                                        .labelMedium
+                            )
                         }
                     }
                 }
+            }
+        }
+    }
+}
                 item(key = "status") {
                     var showStatus by remember { mutableStateOf(true) }
                     LaunchedEffect(roomState) {

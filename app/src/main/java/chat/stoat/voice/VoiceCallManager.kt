@@ -34,7 +34,6 @@ import io.livekit.android.room.participant.VideoTrackPublishDefaults
 import io.livekit.android.room.track.LocalAudioTrack
 import io.livekit.android.room.track.LocalVideoTrack
 import io.livekit.android.room.track.LocalVideoTrackOptions
-import io.livekit.android.room.track.RemoteAudioTrack
 import io.livekit.android.room.track.VideoCaptureParameter
 import io.livekit.android.room.track.VideoEncoding
 import io.livekit.android.room.track.Track
@@ -133,6 +132,7 @@ object VoiceCallManager {
             val connection = fetchVoiceToken(channelId) ?: return@launch
             try {
                 newRoom.connect(connection.url, connection.token)
+                ScreenShareWatchController.enforceSubscriptions(newRoom)
                 newRoom.localParticipant.setMicrophoneEnabled(true)
             } catch (e: Exception) {
                 logcat(LogPriority.ERROR) { "Could not connect to LiveKit room\n" + e.asLog() }
@@ -157,6 +157,7 @@ object VoiceCallManager {
         errorResource = null
         isDeafened = false
         micWasOnBeforeDeafen = false
+        ScreenShareWatchController.reset()
 
         if (leftRoom != null) {
             stopScreenAudioCapture()
@@ -274,6 +275,36 @@ object VoiceCallManager {
         screenAudioCapturer = null
     }
 
+    fun hasRemoteParticipant(
+        userId: String
+    ): Boolean {
+        return room
+            ?.remoteParticipants
+            ?.values
+            ?.any {
+                it.identity?.value == userId
+            } == true
+    }
+
+    fun getUserVoiceVolume(
+        userId: String
+    ): Float =
+        ScreenShareWatchController
+            .getVoiceVolume(userId)
+
+    fun setUserVoiceVolume(
+        userId: String,
+        volume: Float
+    ) {
+        val currentRoom = room ?: return
+
+        ScreenShareWatchController.setVoiceVolume(
+            currentRoom,
+            userId,
+            volume
+        )
+    }
+
     fun toggleMicrophone() {
         val room = room ?: return
         val isMicOn = room.localParticipant.isMicrophoneEnabled
@@ -306,11 +337,10 @@ object VoiceCallManager {
     }
 
     private fun applyDeafenState(room: Room) {
-        room.remoteParticipants.values.forEach { participant ->
-            participant.audioTrackPublications.forEach { (_, track) ->
-                (track as? RemoteAudioTrack)?.setVolume(if (isDeafened) 0.0 else 1.0)
-            }
-        }
+        ScreenShareWatchController.applyAudioState(
+            room,
+            isDeafened
+        )
     }
 
     private suspend fun watchRoomState(room: Room, channelId: String) {
@@ -340,7 +370,10 @@ object VoiceCallManager {
     private suspend fun watchRoomEvents(room: Room) {
         room.events.events.collect { event ->
             when (event) {
-                is RoomEvent.TrackSubscribed -> applyDeafenState(room)
+                is RoomEvent.TrackSubscribed -> {
+                    ScreenShareWatchController.enforceSubscriptions(room)
+                    applyDeafenState(room)
+                }
 
                 is RoomEvent.ParticipantConnected -> soundPlayer?.play(VoiceSound.USER_JOIN)
                 is RoomEvent.ParticipantDisconnected -> soundPlayer?.play(VoiceSound.USER_LEAVE)
@@ -351,6 +384,10 @@ object VoiceCallManager {
                     ) {
                         soundPlayer?.play(VoiceSound.STREAM_START)
                     }
+
+                    if (event.participant != room.localParticipant) {
+                        ScreenShareWatchController.enforceSubscriptions(room)
+                    }
                 }
 
                 is RoomEvent.TrackUnpublished -> {
@@ -358,6 +395,10 @@ object VoiceCallManager {
                         event.publication.source == Track.Source.SCREEN_SHARE
                     ) {
                         soundPlayer?.play(VoiceSound.STREAM_END)
+
+                        event.participant.identity?.value?.let {
+                            ScreenShareWatchController.clearWatching(it)
+                        }
                     }
                 }
 

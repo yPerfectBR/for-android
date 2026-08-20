@@ -17,10 +17,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -42,6 +44,7 @@ import chat.stoat.api.StoatAPI
 import chat.stoat.core.model.schemas.User
 import chat.stoat.composables.profile.UserCard
 import chat.stoat.internals.Platform
+import chat.stoat.voice.VoiceCallManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,6 +60,22 @@ fun UserCardSheet(user: User?) {
     val clipboardManager = LocalClipboardManager.current
 
     var hasError by remember { mutableStateOf(false) }
+
+    val selectedUserId = user?.id
+
+    val controlledUserId =
+        selectedUserId?.takeIf {
+            it != StoatAPI.selfId.toString() &&
+                VoiceCallManager.hasRemoteParticipant(it)
+        }
+
+    var userVoiceVolume by remember(selectedUserId) {
+        mutableFloatStateOf(
+            selectedUserId?.let {
+                VoiceCallManager.getUserVoiceVolume(it)
+            } ?: 1f
+        )
+    }
 
     suspend fun shareCard() {
         val folder = File(
@@ -182,6 +201,30 @@ fun UserCardSheet(user: User?) {
                     }
                 }
         )
+
+        if (controlledUserId != null) {
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "Voice volume " +
+                    "${(userVoiceVolume * 100).toInt()}%",
+                style = MaterialTheme.typography.titleSmall
+            )
+
+            Slider(
+                value = userVoiceVolume,
+                onValueChange = { value ->
+                    userVoiceVolume = value
+
+                    VoiceCallManager.setUserVoiceVolume(
+                        controlledUserId,
+                        value
+                    )
+                },
+                valueRange = 0f..2f,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
 
         AnimatedVisibility(visible = hasError) {
             Spacer(modifier = Modifier.height(16.dp))
